@@ -41,10 +41,15 @@
 
     - name: Створити файл .env
       copy:
-        content: "PORT=5000\n"
-        dest: "{{ app_dir }}/.env"
+        content: |
+          PORT=5000
+          POSTGRES_PASSWORD={{ db_password }}
+        dest: "{{ app_dir }}/devops-ai-assistant/10_Implementation/01_vm/.env"
         owner: "{{ app_user }}"
+        group: "{{ app_user }}"
         mode: '0600'
+      notify:
+        - Restart training-app
 
     - name: Встановити Python-залежності
       pip:
@@ -52,6 +57,20 @@
         virtualenv: "{{ app_dir }}/venv"
         virtualenv_python: python3
       become_user: "{{ app_user }}"
+
+    - name: Встановити Docker
+      apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+        update_cache: yes
+
+    - name: Додати користувача training до групи docker
+      user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: yes
 
     - name: Скопіювати unit-файл сервісу
       copy:
@@ -73,6 +92,60 @@
       systemd:
         name: training-app
         state: started
+
+    - name: Запустити PostgreSQL контейнер
+      command: docker compose up -d
+      args:
+        chdir: "{{ app_dir }}/devops-ai-assistant/10_Implementation/01_vm"
+
+    - name: Скопіювати скрипт моніторингу
+      copy:
+        src: ../monitor.sh
+        dest: "/opt/training-app/monitor.sh"
+        owner: training
+        group: training
+        mode: '0755'
+
+    - name: Переконатися, що лог-файл моніторингу існує
+      file:
+        path: "/opt/training-app/monitor.log"
+        state: touch
+        owner: training
+        group: training
+        mode: '0644'
+
+    - name: Скопіювати unit-файл monitor.service
+      copy:
+        src: ../monitor.service
+        dest: /etc/systemd/system/monitor.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Скопіювати unit-файл monitor.timer
+      copy:
+        src: ../monitor.timer
+        dest: /etc/systemd/system/monitor.timer
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Скопіювати конфігурацію logrotate
+      copy:
+        src: ../monitor-logrotate
+        dest: /etc/logrotate.d/monitor
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Активувати та запустити monitor.timer
+      systemd:
+        name: monitor.timer
+        enabled: yes
+        state: started
+
   handlers:
     - name: Reload systemd
       systemd:
